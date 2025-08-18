@@ -14,22 +14,21 @@ by Jeffery Myers is marked with CC0 1.0. To view a copy of this license, visit h
 
 #include "math.h"
 
-struct fieldlike {
-	Vector2 p;
-	Vector2 direction;
-	double Magnitude;
-};
 
-struct chargelike {
-	Vector2 p;
-	double charge;
-};
 
-#define gridsize 50
+
+#define gridsize 150
 #define n 2
 
-struct fieldlike fieldlines[gridsize][gridsize];
-struct chargelike charges[n];
+struct Field2D {
+	double field[gridsize][gridsize][9];
+};
+
+struct Field2D fieldo;
+
+struct Field2D next_field;
+
+
 
 double log_scale(double input) {
     if (input >= 1.0) return 1.0;
@@ -39,6 +38,8 @@ double log_scale(double input) {
     double scaled = (log_val + 9.0) / 9.0;  // map -9.0 → 0..1
     return scaled;
 }
+
+
 
 Color GetRainbowColor(float t, double tr) {
     // Clamp t between 0 and 1
@@ -73,32 +74,138 @@ Color GetRainbowColor(float t, double tr) {
     return CLITERAL(Color){ r, g, b, a };
 }
 
+int DiscreteVelociyVectors[9][2] = {
+	{-1,1},
+	{0,1},
+	{1,1},
+	{-1,0},
+	{0,0},
+	{1,0},
+	{-1,-1},
+	{0,-1},
+	{1,-1}
+};
+
+
+double velocityField[gridsize][gridsize][2];
+double DensityField[gridsize][gridsize];
+int SolidField[gridsize][gridsize];
+#define SpeedOfSound (1.0/1.7320508075688772)
+#define TimeRelaxationConstant 0.9
+#define defaultSpeedX 0.1
+#define defaultSpeedY 0.0
+
+double getMomentum(struct Field2D exfield, int x, int y) {
+	double xmom = 0;
+	double ymom = 0;
+	xmom = velocityField[x][y][0] * DensityField[x][y];
+	ymom = velocityField[x][y][1] * DensityField[x][y];
+	return pow(pow(xmom,2) + pow(ymom,2), 0.5);
+}
+
+
+
+void MakeSolidDisc(double r, double x0, double y0) {
+	for (int x=0; x < gridsize; x++) {
+		for (int y=0; y < gridsize; y++) {
+			if( pow((pow((double)x-x0, 2) + pow((double)y-y0, 2)), 0.5) < r) {
+				SolidField[x][y] = 1;
+			}
+		}
+	}
+}
+
+void MakeLiquidDisc(double r, double x0, double y0) {
+	for (int x=0; x < gridsize; x++) {
+		for (int y=0; y < gridsize; y++) {
+			if( pow((pow((double)x-x0, 2) + pow((double)y-y0, 2)), 0.5) < r) {
+				SolidField[x][y] = 0;
+			}
+		}
+	}
+}
+
+void MakeSolidRectangle(double x0, double y0, double x1, double y1) {
+	for (int x=0; x < gridsize; x++) {
+		for (int y=0; y < gridsize; y++) {
+			if( (double)x-x0 < x1 && (double)x-x0 > 0 && (double)y-y0 < y1 && (double)y-y0 > 0) {
+				SolidField[x][y] = 1;
+			}
+		}
+	}
+}
+
+int opposite[9] = {8, 7, 6, 5, 4, 3, 2, 1, 0};
+
+double Weights[9] = {1.0 / 36, 1.0 / 9, 1.0 / 36, 1.0 / 9, 4.0 / 9, 1.0 / 9, 1.0 / 36, 1.0 / 9, 1.0 / 36};
+
 int main ()
 {
 	#define WindowSize 1200
 	InitWindow(WindowSize,WindowSize,"basic window");
 	SetTargetFPS(24);
 
-	// body setup
-	int i,j,k;
-
-	for(i=0;i<n;i++) {
-		charges[i].p = (Vector2){0.1,0.1};
-		charges[i].charge = 3;
-	}
-
-	charges[0].p = (Vector2){0.5,0.4};
-	charges[1].p = (Vector2){0.5,0.6};
-	charges[1].charge = -10;
-
-	for(i=0;i<gridsize;i++) {
-		for(j=0;j<gridsize;j++) {
-			#define fieldline fieldlines[i][j]
-			fieldline.p = (Vector2){((double)(i))/(double)(gridsize),((double)(j))/(double)(gridsize)};
-			fieldline.direction = (Vector2){0,0};
-			fieldline.Magnitude = 0;
+	int x,y;
+	for(x=0;x<gridsize;x++) {
+		for(y=0;y<gridsize;y++) {
+			for(int k=0; k<2; k++) {
+				velocityField[x][y][k] = 0.0;
+			}
 		}
 	}
+
+	double BodyForce[2] = {0.0,0.0};
+
+	for(x=0;x<gridsize;x++) {
+		for(y=0;y<gridsize;y++) {
+			DensityField[x][y] = 1.0;
+		}
+	}
+
+	for(x=0;x<gridsize;x++) {
+		for(y=0;y<gridsize;y++) {
+			SolidField[x][y] = 0;
+		}
+	}
+
+	// MakeSolidDisc(12,75,75);
+	// MakeLiquidDisc(8,70,75);
+	// MakeLiquidDisc
+	// MakeLiquidDisc(10,75,75);
+
+	MakeSolidRectangle(60,60,18,18);
+
+	// MakeSolidRectangle(75, 100, 10, 10);
+	// MakeSolidDisc(5,90,75);
+	
+	// DensityField[25][25] = 40.0;
+
+	// for(x=6;x<=9;x++) {
+	// 	for(y=6;y<=9;y++) {
+	// 		DensityField[x][y] = 5.0;
+	// 	}
+	// }
+
+	// for(x=43;x<=51;x++) {
+	// 	for(y=43;y<=51;y++) {
+	// 		DensityField[x][y] = 5;
+	// 	}
+	// }
+	// velocityField[25][25][1] = 0.1;
+	double default_val[9] = {0.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,0.0};
+	for(x=0;x<gridsize;x++) {
+    	for(y=0;y<gridsize;y++) {
+        	for(int k=0; k<9; k++) {
+            	fieldo.field[x][y][k] = default_val[k];
+        	}
+    	}
+	}
+
+	// collision step
+	int i,j,k;
+
+	
+	int pos = 10;
 	
 	int rhythm = 0;
 
@@ -108,70 +215,165 @@ int main ()
 		BeginDrawing();
 		ClearBackground(BLACK);
 
-		for(i=0;i<gridsize;i++) {
-			for(j=0;j<gridsize;j++) {
-				#define fieldline fieldlines[i][j]
-				fieldline.direction = (Vector2){0.0,0.0};
-				Vector2 forceVector = (Vector2){0.0,0.0};
-				for(k=0;k<n;k++) {
-					#define chargebit charges[k]
-					if (Vector2Length(Vector2Subtract(fieldline.p, chargebit.p)) < 0.01) {
-						continue;
-					}
-					
-					forceVector = Vector2Add(forceVector, Vector2Scale(Vector2Normalize(Vector2Subtract(fieldline.p, chargebit.p)), chargebit.charge/(pow(Vector2Distance(chargebit.p,fieldline.p),2))));
-					#undef chargebit
-				}
-				fieldline.Magnitude = Vector2Length(forceVector);
-				fieldline.direction = Vector2Normalize(forceVector);
-				#undef fieldline
-			}
-		}
-
-		for(k=0;k<n;k++) {
-			DrawRectangle(1200*charges[k].p.x-20, 1200*charges[k].p.y-20, 40,40, RED);
-		}
-		double highestMag = 0;
-		if(rhythm > 60) {
-			rhythm = 0;
-		}
-		else {
-			rhythm += 1;
-		}
-		// for(i=0;i<gridsize;i++) {
-		// 	for(j=0;j<gridsize;j++) {
-		// 		#define fieldline fieldlines[i][j]
-		// 		if (fieldline.Magnitude > highestMag) {
-		// 			highestMag = fieldline.Magnitude;
-		// 		}
-		// 		#undef fieldline
-		// 	}
+		// rhythm += 1;
+		// rhythm = rhythm % 5;
+		// if(rhythm == 0) {
+		// 	pos += 1;
+		// 	pos = pos % gridsize;
 		// }
-		for (i=0;i<n;i++) {
-			#define charg charges[i]
 
-			if(fabs(100*charg.charge) > highestMag) {
-				highestMag = fabs(100*charg.charge);
+		// MakeSolidDisc(8, pos, 30);
+		// MakeLiquidDisc(8, pos+2, 30);
+
+		struct Field2D df;
+
+		for(x=0;x<gridsize;x++) {
+			for(y=0;y<gridsize;y++) {
+				if (SolidField[x][y] == 1) {
+					continue;
+				}
+				for(int v=0; v<9; v++) {
+					double Velocity = fieldo.field[x][y][v];
+					double FirstTerm = Velocity;
+					double FlowVelocity[2] = {velocityField[x][y][0], velocityField[x][y][1]};
+					double Dotted = (
+						FlowVelocity[0]*(double)DiscreteVelociyVectors[v][0]
+						+ FlowVelocity[1]*(double)DiscreteVelociyVectors[v][1]
+					);
+					double taylor = (
+						1
+						+ ((Dotted)/pow(SpeedOfSound, 2))
+						+ (pow(Dotted,2) / (2*pow(SpeedOfSound, 4)))
+						- (
+							(pow(FlowVelocity[0],2) + pow(FlowVelocity[1],2))
+							/ (2*pow(SpeedOfSound,2))
+						)
+					);
+					double density = DensityField[x][y];
+					double equilibrium = density * taylor * Weights[v];
+					double discminusflow[2] = {(double)DiscreteVelociyVectors[v][0] - FlowVelocity[0], (double)DiscreteVelociyVectors[v][1] - FlowVelocity[1]};
+					double discdotflow = (double)DiscreteVelociyVectors[v][0]*FlowVelocity[0]+ DiscreteVelociyVectors[v][1]*FlowVelocity[1];
+					// double ThirdTerm = 3*Weights[v]*((
+					// 	(discminusflow[0])*BodyForce[0]
+					// 	+ (discminusflow[1])*BodyForce[1]
+					// ) / (pow(SpeedOfSound, 2)) + 3*discdotflow*(
+					// 	(double)DiscreteVelociyVectors[v][0]*BodyForce[0]
+					// 	+ (double)DiscreteVelociyVectors[v][1]*BodyForce[1]
+					// ) / (pow(SpeedOfSound, 4)));
+
+					double dotcF = (double)DiscreteVelociyVectors[v][0]*BodyForce[0] + 
+								(double)DiscreteVelociyVectors[v][1]*BodyForce[1];
+					double dotcu = (double)DiscreteVelociyVectors[v][0]*FlowVelocity[0] + 
+								(double)DiscreteVelociyVectors[v][1]*FlowVelocity[1];
+
+					double ThirdTerm = (1.0 - 0.5/TimeRelaxationConstant) * Weights[v] * (
+						(((double)DiscreteVelociyVectors[v][0] - FlowVelocity[0]) * BodyForce[0] +
+						((double)DiscreteVelociyVectors[v][1] - FlowVelocity[1]) * BodyForce[1]) / (SpeedOfSound*SpeedOfSound)
+					+ (dotcu * dotcF) / (SpeedOfSound*SpeedOfSound*SpeedOfSound*SpeedOfSound)
+					);
+
+
+					double SecondTerm = (equilibrium - Velocity) / TimeRelaxationConstant;
+					df.field[x][y][v] = FirstTerm + SecondTerm + ThirdTerm;
+
+				}
 			}
-
-			#undef charg
 		}
-		for(i=0;i<gridsize;i++) {
-			for(j=0;j<gridsize;j++) {
-				#define fieldline fieldlines[i][j]
-				// double length = (fieldline.Magnitude);
-				double length = (((double)rhythm/60)*0.8)/((double)gridsize);
-				#define clr GetRainbowColor(log_scale(fieldline.Magnitude/(highestMag)), 1)
-				// #define clr CLITERAL(Color) {255,255,255,255*log_scale(fieldline.Magnitude/(highestMag))}
-				// #define clr 
-				// DrawRectangle(1200*fieldline.p.x, 1200*fieldline.p.y, 10,10, BLUE);
+
+		for(x=0;x<gridsize;x++) {
+			for(y=0;y<gridsize;y++) {
+				if(SolidField[x][y] == 1) {
+					continue;
+				}
+				for(int v=0; v<9; v++) {
+
+					int tx = x + DiscreteVelociyVectors[v][0];
+					int ty = y + DiscreteVelociyVectors[v][1];
+
+					if (tx >= 0 && tx < gridsize && ty >= 0 && ty < gridsize) {
+						// do normal stuff
+						if (SolidField[tx][ty] == 1) {
+							fieldo.field[x][y][opposite[v]] = df.field[x][y][v];
+						}
+						else {
+							fieldo.field[tx][ty][v] = df.field[x][y][v];
+						}
+						
+					}
+					else {
+						// boundaries!
+						// periodic
+						tx = (tx+gridsize) % gridsize;
+						ty = (ty+gridsize) % gridsize;
+						fieldo.field[tx][ty][v] = df.field[x][y][v];
+						// neighbor outside → bounce back into opposite direction
+						// fieldo.field[x][y][opposite[v]] = df.field[x][y][v];
+					}
+				}
+			}
+		}
+
+		for(x=0;x<gridsize;x++) {
+			for(y=0;y<gridsize;y++) {
+				double sum = 0;
+				int v;
+				for (v=0; v < 9; v++) {
+					sum += fieldo.field[x][y][v];
+				}
 				
-				DrawLine((int)(WindowSize*fieldline.p.x), (int)(WindowSize*fieldline.p.y), (int)(WindowSize*fieldline.direction.x*length + WindowSize*fieldline.p.x), (int)(WindowSize*fieldline.direction.y*length + fieldline.p.y*WindowSize), clr);
-				#undef clr
-				#undef fieldline
+				DensityField[x][y] = sum;
+				double FlowVelocity[2] = {defaultSpeedX, defaultSpeedY};
+				for (v=0; v < 9; v++) {
+					FlowVelocity[0] = (
+						FlowVelocity[0] 
+						+ (double)DiscreteVelociyVectors[v][0]
+						* fieldo.field[x][y][v]
+					);
+				}
+				for (v=0; v < 9; v++) {
+					FlowVelocity[1] = (
+						FlowVelocity[1] 
+						+ (double)DiscreteVelociyVectors[v][1]
+						* fieldo.field[x][y][v]
+					);
+				}
+				// if (DensityField[x][y] < 0.5) {
+				// 	DensityField[x][y] = 0.5;
+				// } 
+				FlowVelocity[0] = (FlowVelocity[0] + 0.5*BodyForce[0]) / DensityField[x][y];
+				FlowVelocity[1] = (FlowVelocity[1] + 0.5*BodyForce[1]) / DensityField[x][y];
+				double vmag = pow(pow(FlowVelocity[0], 2) + pow(FlowVelocity[1], 2) ,0.5);
+
+				if (vmag > SpeedOfSound - 0.01) {
+					FlowVelocity[0] = (SpeedOfSound - 0.01)*FlowVelocity[0]/vmag;
+					FlowVelocity[1] = (SpeedOfSound - 0.01)*FlowVelocity[1]/vmag;
+				}
+
+				velocityField[x][y][0] = FlowVelocity[0];
+				velocityField[x][y][1] = FlowVelocity[1];
 			}
 		}
 		// DrawLine(100,100,120,120,BLUE);
+
+		
+
+		for (x=0; x < gridsize; x++) {
+			for (y=0; y < gridsize; y++) {
+				if (x == 0 || x == gridsize - 1 || y == 0 || y == gridsize - 1) {
+					DensityField[x][y]=1.0;
+				}
+				Color clr;
+				if (SolidField[x][y] == 1) {
+					clr = WHITE;
+				}
+				else {
+					clr = GetRainbowColor(getMomentum(fieldo, x, y), 1);
+					// clr = GetRainbowColor(DensityField[x][y]/8, 1);
+				}
+				DrawRectangle((int)(((double)x/(double)gridsize)*1200), (int)(((double)y/(double)gridsize)*1200), (int)(1200/(double)gridsize) + 1, (int)(1200/(double)gridsize) + 1, clr);
+			}
+		}
+
 		EndDrawing();
 	}
 	CloseWindow();

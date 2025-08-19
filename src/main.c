@@ -28,7 +28,36 @@ struct Field2D fieldo;
 
 struct Field2D next_field;
 
+Color HSVtoRGB(float h, float s, float v) {
+    float c = v * s;                   // chroma
+    float x = c * (1 - fabsf(fmodf(h / 60.0f, 2) - 1));
+    float m = v - c;
 
+    float r, g, b;
+    if      (h < 60)  { r = c; g = x; b = 0; }
+    else if (h < 120) { r = x; g = c; b = 0; }
+    else if (h < 180) { r = 0; g = c; b = x; }
+    else if (h < 240) { r = 0; g = x; b = c; }
+    else if (h < 300) { r = x; g = 0; b = c; }
+    else              { r = c; g = 0; b = x; }
+
+    unsigned char R = (unsigned char)((r + m) * 255);
+    unsigned char G = (unsigned char)((g + m) * 255);
+    unsigned char B = (unsigned char)((b + m) * 255);
+
+    return (Color){ R, G, B, 255 };
+}
+
+// Angle in radians, returns rainbow color wheel smoothly wrapping
+Color AngleToRainbow(double angle) {
+    // Normalize angle into [0, 2π)
+    while (angle < 0) angle += 2*PI;
+    while (angle >= 2*PI) angle -= 2*PI;
+
+    // Map [0, 2π) → [0, 360)
+    float hue = (float)(angle * 180.0 / PI);
+    return HSVtoRGB(hue, 1.0f, 1.0f);
+}
 
 double log_scale(double input) {
     if (input >= 1.0) return 1.0;
@@ -66,10 +95,10 @@ Color GetRainbowColor(float t, double tr) {
     else               { rf = c; gf = 0; bf = x; }
 
     // Convert to 0-255 range
-    unsigned char r = (unsigned char)((rf + m) * 255);
-    unsigned char g = (unsigned char)((gf + m) * 255);
-    unsigned char b = (unsigned char)((bf + m) * 255);
-    unsigned char a = (int)(255*tr);
+    unsigned char r = (unsigned char)((rf + m) * 255*tr);
+    unsigned char g = (unsigned char)((gf + m) * 255*tr);
+    unsigned char b = (unsigned char)((bf + m) * 255*tr);
+    unsigned char a = (int)(255);
 
     return CLITERAL(Color){ r, g, b, a };
 }
@@ -90,9 +119,10 @@ int DiscreteVelociyVectors[9][2] = {
 double velocityField[gridsize][gridsize][2];
 double DensityField[gridsize][gridsize];
 int SolidField[gridsize][gridsize];
+double SolidVelocityField[gridsize][gridsize][2];
 #define SpeedOfSound (1.0/1.7320508075688772)
 #define TimeRelaxationConstant 0.9
-#define defaultSpeedX 0.1
+#define defaultSpeedX 0.0
 #define defaultSpeedY 0.0
 
 double getMomentum(struct Field2D exfield, int x, int y) {
@@ -135,9 +165,28 @@ void MakeSolidRectangle(double x0, double y0, double x1, double y1) {
 	}
 }
 
+void MakeLiquidRectangle(double x0, double y0, double x1, double y1) {
+	for (int x=0; x < gridsize; x++) {
+		for (int y=0; y < gridsize; y++) {
+			if( (double)x-x0 < x1 && (double)x-x0 > 0 && (double)y-y0 < y1 && (double)y-y0 > 0) {
+				SolidField[x][y] = 0;
+			}
+		}
+	}
+}
+
+double atan3(double x, double y) {
+    double angle = atan2(y, x);   // range (-π, π]
+    if (angle < 0) {
+        angle += 2.0 * PI;      // shift into [0, 2π)
+    }
+    return angle;
+}
+
 int opposite[9] = {8, 7, 6, 5, 4, 3, 2, 1, 0};
 
 double Weights[9] = {1.0 / 36, 1.0 / 9, 1.0 / 36, 1.0 / 9, 4.0 / 9, 1.0 / 9, 1.0 / 36, 1.0 / 9, 1.0 / 36};
+double BodyForceTable[gridsize][gridsize][2];
 
 int main ()
 {
@@ -146,15 +195,9 @@ int main ()
 	SetTargetFPS(24);
 
 	int x,y;
-	for(x=0;x<gridsize;x++) {
-		for(y=0;y<gridsize;y++) {
-			for(int k=0; k<2; k++) {
-				velocityField[x][y][k] = 0.0;
-			}
-		}
-	}
 
-	double BodyForce[2] = {0.0,0.0};
+
+	// double BodyForce[2] = {0.0,0.0};
 
 	for(x=0;x<gridsize;x++) {
 		for(y=0;y<gridsize;y++) {
@@ -164,16 +207,23 @@ int main ()
 
 	for(x=0;x<gridsize;x++) {
 		for(y=0;y<gridsize;y++) {
+			BodyForceTable[x][y][0] = 0.0;
+			BodyForceTable[x][y][1] = 0.0;
+		}
+	}
+
+	for(x=0;x<gridsize;x++) {
+		for(y=0;y<gridsize;y++) {
 			SolidField[x][y] = 0;
 		}
 	}
 
-	// MakeSolidDisc(12,75,75);
+	MakeSolidDisc(10,75,75);
 	// MakeLiquidDisc(8,70,75);
 	// MakeLiquidDisc
 	// MakeLiquidDisc(10,75,75);
 
-	MakeSolidRectangle(60,60,18,18);
+	// MakeSolidRectangle(60,60,10,10);
 
 	// MakeSolidRectangle(75, 100, 10, 10);
 	// MakeSolidDisc(5,90,75);
@@ -201,6 +251,14 @@ int main ()
     	}
 	}
 
+	for(x=0;x<gridsize;x++) {
+		for(y=0;y<gridsize;y++) {
+			if(SolidField[x][y]==1) {continue;}
+			velocityField[x][y][0] = defaultSpeedX;
+			velocityField[x][y][1] = defaultSpeedY;
+		}
+	}
+
 	// collision step
 	int i,j,k;
 
@@ -222,8 +280,15 @@ int main ()
 		// 	pos = pos % gridsize;
 		// }
 
-		// MakeSolidDisc(8, pos, 30);
-		// MakeLiquidDisc(8, pos+2, 30);
+		rhythm += 1;
+		
+		double freq = 10.0;
+		double amp = 0.4;
+		// double FlowVelocity[2] = {(amp/pow(freq,2))*sin(((double)rhythm)/freq), 0.0};
+
+		// double BodyForce[2] = {(amp/pow(freq,2))*sin(((double)rhythm)/freq), 0.0};
+
+		double BodyForce[2] = {0.000,0.000};
 
 		struct Field2D df;
 
@@ -232,6 +297,9 @@ int main ()
 				if (SolidField[x][y] == 1) {
 					continue;
 				}
+				double BodyForce[2] = {0.0,0.0};
+				BodyForce[0]=BodyForceTable[x][y][0];
+				BodyForce[1]=BodyForceTable[x][y][1];
 				for(int v=0; v<9; v++) {
 					double Velocity = fieldo.field[x][y][v];
 					double FirstTerm = Velocity;
@@ -251,15 +319,6 @@ int main ()
 					);
 					double density = DensityField[x][y];
 					double equilibrium = density * taylor * Weights[v];
-					double discminusflow[2] = {(double)DiscreteVelociyVectors[v][0] - FlowVelocity[0], (double)DiscreteVelociyVectors[v][1] - FlowVelocity[1]};
-					double discdotflow = (double)DiscreteVelociyVectors[v][0]*FlowVelocity[0]+ DiscreteVelociyVectors[v][1]*FlowVelocity[1];
-					// double ThirdTerm = 3*Weights[v]*((
-					// 	(discminusflow[0])*BodyForce[0]
-					// 	+ (discminusflow[1])*BodyForce[1]
-					// ) / (pow(SpeedOfSound, 2)) + 3*discdotflow*(
-					// 	(double)DiscreteVelociyVectors[v][0]*BodyForce[0]
-					// 	+ (double)DiscreteVelociyVectors[v][1]*BodyForce[1]
-					// ) / (pow(SpeedOfSound, 4)));
 
 					double dotcF = (double)DiscreteVelociyVectors[v][0]*BodyForce[0] + 
 								(double)DiscreteVelociyVectors[v][1]*BodyForce[1];
@@ -303,11 +362,21 @@ int main ()
 					else {
 						// boundaries!
 						// periodic
-						tx = (tx+gridsize) % gridsize;
-						ty = (ty+gridsize) % gridsize;
-						fieldo.field[tx][ty][v] = df.field[x][y][v];
+						// tx = (tx+gridsize) % gridsize;
+						// ty = (ty+gridsize) % gridsize;
+						// fieldo.field[tx][ty][v] = df.field[x][y][v];
 						// neighbor outside → bounce back into opposite direction
 						// fieldo.field[x][y][opposite[v]] = df.field[x][y][v];
+
+						if(ty==-1 || ty == gridsize) {
+							fieldo.field[x][y][opposite[v]] = df.field[x][y][v];
+						}
+						else {
+							tx = (tx+gridsize) % gridsize;
+							ty = (ty+gridsize) % gridsize;
+							fieldo.field[tx][ty][v] = df.field[x][y][v];
+						}
+
 					}
 				}
 			}
@@ -322,7 +391,7 @@ int main ()
 				}
 				
 				DensityField[x][y] = sum;
-				double FlowVelocity[2] = {defaultSpeedX, defaultSpeedY};
+				double FlowVelocity[2] = {0.0, 0.0};
 				for (v=0; v < 9; v++) {
 					FlowVelocity[0] = (
 						FlowVelocity[0] 
@@ -359,16 +428,18 @@ int main ()
 
 		for (x=0; x < gridsize; x++) {
 			for (y=0; y < gridsize; y++) {
-				if (x == 0 || x == gridsize - 1 || y == 0 || y == gridsize - 1) {
-					DensityField[x][y]=1.0;
-				}
+				// if (x <= 1 || x >= gridsize - 2 || y <= 1 || y >= gridsize - 2) {
+				// 	DensityField[x][y]=1.0;
+				// }
 				Color clr;
 				if (SolidField[x][y] == 1) {
 					clr = WHITE;
 				}
 				else {
-					clr = GetRainbowColor(getMomentum(fieldo, x, y), 1);
-					// clr = GetRainbowColor(DensityField[x][y]/8, 1);
+
+					clr = GetRainbowColor(5*getMomentum(fieldo,x,y)/SpeedOfSound, 1);
+					// clr = AngleToRainbow(atan3(velocityField[x][y][0],velocityField[x][y][1]));
+					// clr = GetRainbowColor(DensityField[x][y]/4, 1);
 				}
 				DrawRectangle((int)(((double)x/(double)gridsize)*1200), (int)(((double)y/(double)gridsize)*1200), (int)(1200/(double)gridsize) + 1, (int)(1200/(double)gridsize) + 1, clr);
 			}

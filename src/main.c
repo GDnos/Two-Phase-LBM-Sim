@@ -10,23 +10,15 @@ by Jeffery Myers is marked with CC0 1.0. To view a copy of this license, visit h
 #include "raylib.h"
 #include "raymath.h"
 
-#include "resource_dir.h"	// utility header for SearchAndSetResourceDir
+// #include "resource_dir.h"	// utility header for SearchAndSetResourceDir
 
 #include "math.h"
+#include <stdio.h>
+#include <stdlib.h>
 
 
-
-
-#define gridsize 150
-#define n 2
-
-struct Field2D {
-	double field[gridsize][gridsize][9];
-};
-
-struct Field2D fieldo;
-
-struct Field2D next_field;
+// Graphing Utilities
+// // // // //
 
 Color HSVtoRGB(float h, float s, float v) {
     float c = v * s;                   // chroma
@@ -103,6 +95,19 @@ Color GetRainbowColor(float t, double tr) {
     return CLITERAL(Color){ r, g, b, a };
 }
 
+// EARLY DEFINITIONS
+// // // // //
+
+#define gridsize 500
+
+struct Field2D {
+	double field[gridsize][gridsize][9];
+};
+
+struct Field2D fieldo;
+
+struct Field2D next_field;
+
 int DiscreteVelociyVectors[9][2] = {
 	{-1,1},
 	{0,1},
@@ -115,15 +120,31 @@ int DiscreteVelociyVectors[9][2] = {
 	{1,-1}
 };
 
+struct Field2D df;
 
+// calculate order parameter:
+double phiminusphi3[gridsize][gridsize];
+double lapphiminusphi3[gridsize][gridsize];
+double GradOrderParamField[gridsize][gridsize][2];
+double vdotgrad[gridsize][gridsize];
 double velocityField[gridsize][gridsize][2];
 double DensityField[gridsize][gridsize];
 int SolidField[gridsize][gridsize];
 double SolidVelocityField[gridsize][gridsize][2];
+double OrderParamField[gridsize][gridsize];
+double OrderCubedParamField[gridsize][gridsize];
+double LapOrderParamField[gridsize][gridsize];
+double LapLapOrderParamField[gridsize][gridsize];
 #define SpeedOfSound (1.0/1.7320508075688772)
 #define TimeRelaxationConstant 0.9
 #define defaultSpeedX 0.0
 #define defaultSpeedY 0.0
+#define PeriodicBCX 1
+#define PeriodicBCY 1
+#define MFluid 0.2
+#define fluida 0.05
+#define fluidb 0.05
+#define KFluid 0.04
 
 double getMomentum(struct Field2D exfield, int x, int y) {
 	double xmom = 0;
@@ -133,7 +154,75 @@ double getMomentum(struct Field2D exfield, int x, int y) {
 	return pow(pow(xmom,2) + pow(ymom,2), 0.5);
 }
 
+double atan3(double x, double y) {
+    double angle = atan2(y, x);   // range (-π, π]
+    if (angle < 0) {
+        angle += 2.0 * PI;      // shift into [0, 2π)
+    }
+    return angle;
+}
 
+int opposite[9] = {8, 7, 6, 5, 4, 3, 2, 1, 0};
+
+double Weights[9] = {1.0 / 36, 1.0 / 9, 1.0 / 36, 1.0 / 9, 4.0 / 9, 1.0 / 9, 1.0 / 36, 1.0 / 9, 1.0 / 36};
+double BodyForceTable[gridsize][gridsize][2];
+
+// Field Updating Functions
+// // // // //
+
+inline double getVal(double exfield[gridsize][gridsize], int x, int y, int useGhosts) {
+    if (useGhosts) {
+        if (x < 0) x = 0;
+        if (x >= gridsize) x = gridsize - 1;
+        if (y < 0) y = 0;
+        if (y >= gridsize) y = gridsize - 1;
+        return exfield[x][y];
+    } else {
+        int xi = (x + gridsize) % gridsize;
+        int yi = (y + gridsize) % gridsize;
+        return exfield[xi][yi];
+    }
+}
+
+// 9-point Laplacian
+double computeLaplacianEl(double exfield[gridsize][gridsize], int x, int y, int useGhosts) {
+    double c  = getVal(exfield, x, y, useGhosts);
+    double n  = getVal(exfield, x, y+1, useGhosts);
+    double s  = getVal(exfield, x, y-1, useGhosts);
+    double e  = getVal(exfield, x+1, y, useGhosts);
+    double w  = getVal(exfield, x-1, y, useGhosts);
+    double ne = getVal(exfield, x+1, y+1, useGhosts);
+    double nw = getVal(exfield, x-1, y+1, useGhosts);
+    double se = getVal(exfield, x+1, y-1, useGhosts);
+    double sw = getVal(exfield, x-1, y-1, useGhosts);
+
+    return (-20.0*c + 4.0*(n+s+e+w) + (ne+nw+se+sw)) / 6.0;
+}
+
+// Compute gradient field
+void gradientField(double exfield[gridsize][gridsize], double gradexfield[gridsize][gridsize][2], int useGhosts) {
+    for (int x = 0; x < gridsize; x++) {
+        for (int y = 0; y < gridsize; y++) {
+            double dx = (getVal(exfield, x+1, y, useGhosts) - getVal(exfield, x-1, y, useGhosts)) * 0.5;
+            double dy = (getVal(exfield, x, y+1, useGhosts) - getVal(exfield, x, y-1, useGhosts)) * 0.5;
+
+            gradexfield[x][y][0] = dx; // ∂φ/∂x
+            gradexfield[x][y][1] = dy; // ∂φ/∂y
+        }
+    }
+}
+
+// Compute laplacian field
+void laplacianField(double exfield[gridsize][gridsize], double lap[gridsize][gridsize], int useGhosts) {
+    for (int x = 0; x < gridsize; x++) {
+        for (int y = 0; y < gridsize; y++) {
+            lap[x][y] = computeLaplacianEl(exfield, x, y, useGhosts);
+        }
+    }
+}
+
+// Creating Geometries
+// // // // //
 
 void MakeSolidDisc(double r, double x0, double y0) {
 	for (int x=0; x < gridsize; x++) {
@@ -145,11 +234,12 @@ void MakeSolidDisc(double r, double x0, double y0) {
 	}
 }
 
-void MakeLiquidDisc(double r, double x0, double y0) {
+void MakeLiquidDisc(double r, double x0, double y0, double orderParam) {
 	for (int x=0; x < gridsize; x++) {
 		for (int y=0; y < gridsize; y++) {
 			if( pow((pow((double)x-x0, 2) + pow((double)y-y0, 2)), 0.5) < r) {
 				SolidField[x][y] = 0;
+				OrderParamField[x][y] = orderParam;
 			}
 		}
 	}
@@ -175,24 +265,12 @@ void MakeLiquidRectangle(double x0, double y0, double x1, double y1) {
 	}
 }
 
-double atan3(double x, double y) {
-    double angle = atan2(y, x);   // range (-π, π]
-    if (angle < 0) {
-        angle += 2.0 * PI;      // shift into [0, 2π)
-    }
-    return angle;
-}
 
-int opposite[9] = {8, 7, 6, 5, 4, 3, 2, 1, 0};
-
-double Weights[9] = {1.0 / 36, 1.0 / 9, 1.0 / 36, 1.0 / 9, 4.0 / 9, 1.0 / 9, 1.0 / 36, 1.0 / 9, 1.0 / 36};
-double BodyForceTable[gridsize][gridsize][2];
 
 int main ()
 {
-	#define WindowSize 1200
-	InitWindow(WindowSize,WindowSize,"basic window");
-	SetTargetFPS(24);
+
+	setbuf(stdout, NULL);
 
 	int x,y;
 
@@ -218,7 +296,13 @@ int main ()
 		}
 	}
 
-	MakeSolidDisc(10,75,75);
+	for(x=0;x<gridsize;x++) {
+    	for(y=0;y<gridsize;y++) {
+        	OrderParamField[x][y] = -1.0;
+    	}
+	}
+
+	MakeLiquidDisc(125,250,250, 1.0);
 	// MakeLiquidDisc(8,70,75);
 	// MakeLiquidDisc
 	// MakeLiquidDisc(10,75,75);
@@ -260,37 +344,103 @@ int main ()
 	}
 
 	// collision step
-	int i,j,k;
-
+	int i,j;
+	double bodyfprefactor[gridsize][gridsize];
+	double gradbodyfprefactor[gridsize][gridsize][2];
 	
 	int pos = 10;
+
+	int phi_timesteps = 50;
 	
 	int rhythm = 0;
 
-	while (!WindowShouldClose())
-	{
+	FILE *log = fopen("debug.log", "w");
 
-		BeginDrawing();
-		ClearBackground(BLACK);
+	int l;
+	int time_steps_l = 2000;
+	// double OrderParamTable[time_steps_l][gridsize][gridsize];
+	double *OrderParamTable = malloc(time_steps_l * gridsize * gridsize * sizeof(double));
+	double *MomentumTable = malloc(time_steps_l * gridsize * gridsize * sizeof(double));
+	#define O(l,x,y) OrderParamTable[((l) * gridsize + (x)) * gridsize + (y)]
+	#define Mtbl(l,x,y) MomentumTable[((l) * gridsize + (x)) * gridsize + (y)]
 
-		// rhythm += 1;
-		// rhythm = rhythm % 5;
-		// if(rhythm == 0) {
-		// 	pos += 1;
-		// 	pos = pos % gridsize;
-		// }
+	for (l=0;l<time_steps_l;l++) {
+		for(x=0;x<gridsize;x++) {
+			for(y=0;y<gridsize;y++) {
+				for(int k=0; k<9; k++) {
+					df.field[x][y][k] = default_val[k];
+				}
+			}
+		}
 
-		rhythm += 1;
-		
-		double freq = 10.0;
-		double amp = 0.4;
 		// double FlowVelocity[2] = {(amp/pow(freq,2))*sin(((double)rhythm)/freq), 0.0};
 
 		// double BodyForce[2] = {(amp/pow(freq,2))*sin(((double)rhythm)/freq), 0.0};
 
-		double BodyForce[2] = {0.000,0.000};
+		for (i=0;i<phi_timesteps;i++) {
+			for(x=0;x<gridsize;x++) {
+				for(y=0;y<gridsize;y++) {
+					OrderCubedParamField[x][y] = pow(OrderParamField[x][y], 3.0);
+				}
+			}
+			laplacianField(OrderParamField, LapOrderParamField, 0);
+			laplacianField(LapOrderParamField, LapLapOrderParamField, 0);
+			
+			for(x=0;x<gridsize;x++) {
+				for(y=0;y<gridsize;y++) {
+					phiminusphi3[x][y] = fluida*OrderParamField[x][y] - fluidb*OrderCubedParamField[x][y];
+				}	
+			}
+			
+			laplacianField(phiminusphi3, lapphiminusphi3, 0);
 
-		struct Field2D df;
+			// update order parameter
+			
+			gradientField(OrderParamField, GradOrderParamField, 0);
+			for(x=0;x<gridsize;x++) {
+				for(y=0;y<gridsize;y++) {
+					vdotgrad[x][y] = velocityField[x][y][0]*GradOrderParamField[x][y][0]
+					+ velocityField[x][y][1]*GradOrderParamField[x][y][1];
+				}
+			}
+			double dt_phi = 1.0/((double)phi_timesteps);
+			for(x=0;x<gridsize;x++) {
+				for(y=0;y<gridsize;y++) {
+					OrderParamField[x][y] = OrderParamField[x][y] + dt_phi*(MFluid*lapphiminusphi3[x][y] - MFluid*KFluid*LapLapOrderParamField[x][y] 
+					- vdotgrad[x][y]);
+
+					if (OrderParamField[x][y] > 1.5) OrderParamField[x][y] = 1.5;
+            		if (OrderParamField[x][y] < -1.5) OrderParamField[x][y] = -1.5;
+				}
+			}
+		}
+
+		// calculate body force
+
+		
+		for(x=0;x<gridsize;x++) {
+			for(y=0;y<gridsize;y++) {
+				bodyfprefactor[x][y] = phiminusphi3[x][y] - KFluid*LapOrderParamField[x][y];
+			}
+		}
+		
+		gradientField(bodyfprefactor, gradbodyfprefactor, 0);
+		for(x=0;x<gridsize;x++) {
+			for(y=0;y<gridsize;y++) {
+				BodyForceTable[x][y][0] = -OrderParamField[x][y]*gradbodyfprefactor[x][y][0];
+				BodyForceTable[x][y][1] = -OrderParamField[x][y]*gradbodyfprefactor[x][y][1];
+				double max_force = 0.2;
+				if (BodyForceTable[x][y][0] > max_force) BodyForceTable[x][y][0] = max_force;
+				if (BodyForceTable[x][y][0] < -max_force) BodyForceTable[x][y][0] = -max_force;
+				if (BodyForceTable[x][y][1] > max_force) BodyForceTable[x][y][1] = max_force;
+				if (BodyForceTable[x][y][1] < -max_force) BodyForceTable[x][y][1] = -max_force;
+
+			}
+		}
+
+		
+
+		// collision step:
 
 		for(x=0;x<gridsize;x++) {
 			for(y=0;y<gridsize;y++) {
@@ -339,6 +489,8 @@ int main ()
 			}
 		}
 
+		// streaming step:
+
 		for(x=0;x<gridsize;x++) {
 			for(y=0;y<gridsize;y++) {
 				if(SolidField[x][y] == 1) {
@@ -362,25 +514,44 @@ int main ()
 					else {
 						// boundaries!
 						// periodic
-						// tx = (tx+gridsize) % gridsize;
-						// ty = (ty+gridsize) % gridsize;
-						// fieldo.field[tx][ty][v] = df.field[x][y][v];
+						
 						// neighbor outside → bounce back into opposite direction
 						// fieldo.field[x][y][opposite[v]] = df.field[x][y][v];
 
-						if(ty==-1 || ty == gridsize) {
-							fieldo.field[x][y][opposite[v]] = df.field[x][y][v];
+						if (PeriodicBCX == 1 && PeriodicBCY == 0) {
+							if(ty==-1 || ty == gridsize) {
+								fieldo.field[x][y][opposite[v]] = df.field[x][y][v];
+							}
+							else {
+								tx = (tx+gridsize) % gridsize;
+								ty = (ty+gridsize) % gridsize;
+								fieldo.field[tx][ty][v] = df.field[x][y][v];
+							}
 						}
-						else {
+						else if (PeriodicBCX == 0 && PeriodicBCY == 1) {
+							if(tx==-1 || tx == gridsize) {
+								fieldo.field[x][y][opposite[v]] = df.field[x][y][v];
+							}
+							else {
+								tx = (tx+gridsize) % gridsize;
+								ty = (ty+gridsize) % gridsize;
+								fieldo.field[tx][ty][v] = df.field[x][y][v];
+							}
+						}
+						else if (PeriodicBCX == 1 && PeriodicBCY == 1) {
 							tx = (tx+gridsize) % gridsize;
 							ty = (ty+gridsize) % gridsize;
 							fieldo.field[tx][ty][v] = df.field[x][y][v];
 						}
-
+						else {
+							fieldo.field[x][y][opposite[v]] = df.field[x][y][v];
+						}
 					}
 				}
 			}
 		}
+
+		// update variables
 
 		for(x=0;x<gridsize;x++) {
 			for(y=0;y<gridsize;y++) {
@@ -389,6 +560,10 @@ int main ()
 				for (v=0; v < 9; v++) {
 					sum += fieldo.field[x][y][v];
 				}
+				
+				double BodyForce[2] = {0.0,0.0};
+				BodyForce[0]=BodyForceTable[x][y][0];
+				BodyForce[1]=BodyForceTable[x][y][1];
 				
 				DensityField[x][y] = sum;
 				double FlowVelocity[2] = {0.0, 0.0};
@@ -406,9 +581,9 @@ int main ()
 						* fieldo.field[x][y][v]
 					);
 				}
-				// if (DensityField[x][y] < 0.5) {
-				// 	DensityField[x][y] = 0.5;
-				// } 
+				if (DensityField[x][y] < 0.5) {
+					DensityField[x][y] = 0.5;
+				} 
 				FlowVelocity[0] = (FlowVelocity[0] + 0.5*BodyForce[0]) / DensityField[x][y];
 				FlowVelocity[1] = (FlowVelocity[1] + 0.5*BodyForce[1]) / DensityField[x][y];
 				double vmag = pow(pow(FlowVelocity[0], 2) + pow(FlowVelocity[1], 2) ,0.5);
@@ -422,9 +597,35 @@ int main ()
 				velocityField[x][y][1] = FlowVelocity[1];
 			}
 		}
-		// DrawLine(100,100,120,120,BLUE);
 
-		
+		for(x=0;x<gridsize;x++) {
+			for(y=0;y<gridsize;y++) {
+				O(l, x, y) = OrderParamField[x][y];
+				Mtbl(l, x, y) = getMomentum(fieldo,x,y);
+			}
+		}
+		if (l % 10 == 1) {
+			if (log) {
+				fprintf(log, "Step %d complete\n", l);
+				fflush(log);  // ensures it’s written immediately
+			}
+		}
+	}
+
+	l = 0;
+
+	#define WindowSize 800
+
+	InitWindow(2*WindowSize,WindowSize,"basic window");
+	SetTargetFPS(24);
+
+	while (!WindowShouldClose())
+	{
+
+		BeginDrawing();
+		ClearBackground(BLACK);
+
+		l = (l + 3)%time_steps_l;
 
 		for (x=0; x < gridsize; x++) {
 			for (y=0; y < gridsize; y++) {
@@ -432,16 +633,30 @@ int main ()
 				// 	DensityField[x][y]=1.0;
 				// }
 				Color clr;
+				Color clr2;
 				if (SolidField[x][y] == 1) {
 					clr = WHITE;
+					clr2 = WHITE;
 				}
 				else {
 
-					clr = GetRainbowColor(5*getMomentum(fieldo,x,y)/SpeedOfSound, 1);
+					// clr = GetRainbowColor(20*getMomentum(fieldo,x,y)/SpeedOfSound, 1);
+					if (O(l,x,y) > 0.9) {
+						clr = BLUE;
+					}
+					else if(O(l,x,y) < -0.9) {
+						clr = ORANGE;
+					}
+					else {
+						clr = GREEN;
+					}
+
+					clr2 = GetRainbowColor(10*Mtbl(l,x,y)/SpeedOfSound, 1);
 					// clr = AngleToRainbow(atan3(velocityField[x][y][0],velocityField[x][y][1]));
 					// clr = GetRainbowColor(DensityField[x][y]/4, 1);
 				}
-				DrawRectangle((int)(((double)x/(double)gridsize)*1200), (int)(((double)y/(double)gridsize)*1200), (int)(1200/(double)gridsize) + 1, (int)(1200/(double)gridsize) + 1, clr);
+				DrawRectangle((int)(((double)x/(double)gridsize)*(double)WindowSize), (int)(((double)y/(double)gridsize)*(double)WindowSize), (int)((double)WindowSize/(double)gridsize) + 1, (int)((double)WindowSize/(double)gridsize) + 1, clr);
+				DrawRectangle((int)(((double)x/(double)gridsize)*(double)WindowSize) + WindowSize, (int)(((double)y/(double)gridsize)*(double)WindowSize), (int)((double)WindowSize/(double)gridsize) + 1, (int)((double)WindowSize/(double)gridsize) + 1, clr2);
 			}
 		}
 
@@ -450,3 +665,4 @@ int main ()
 	CloseWindow();
 	return 0;
 }
+

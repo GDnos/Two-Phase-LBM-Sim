@@ -15,6 +15,7 @@ by Jeffery Myers is marked with CC0 1.0. To view a copy of this license, visit h
 #include "math.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
 
 
 // Graphing Utilities
@@ -49,6 +50,30 @@ Color AngleToRainbow(double angle) {
     // Map [0, 2π) → [0, 360)
     float hue = (float)(angle * 180.0 / PI);
     return HSVtoRGB(hue, 1.0f, 1.0f);
+}
+
+Color PhiToColor(double phi) {
+    // Clamp φ
+    if (phi < -1.0) phi = -1.0;
+    if (phi >  1.0) phi =  1.0;
+
+    float h; // hue
+    if (phi < -0.3333) {
+        // [-1, -1/3] : blue → purple
+        h = 240.0f + (phi + 1.0f) / (2.0f/3.0f) * (270.0f - 240.0f);
+    } else if (phi < 0.3333) {
+        // [-1/3, 1/3] : purple → magenta
+        h = 270.0f + (phi + 0.3333f) / (2.0f/3.0f) * (300.0f - 270.0f);
+    } else {
+        // [1/3, 1] : magenta → red
+        h = 300.0f + (phi - 0.3333f) / (2.0f/3.0f) * (360.0f - 300.0f);
+        if (h >= 360.0f) h -= 360.0f; // wrap around
+    }
+
+    float s = 1.0f; // full saturation
+    float v = 1.0f; // full brightness
+
+    return HSVtoRGB(h, s, v);
 }
 
 double log_scale(double input) {
@@ -98,7 +123,7 @@ Color GetRainbowColor(float t, double tr) {
 // EARLY DEFINITIONS
 // // // // //
 
-#define gridsize 500
+#define gridsize 100
 
 struct Field2D {
 	double field[gridsize][gridsize][9];
@@ -123,8 +148,8 @@ int DiscreteVelociyVectors[9][2] = {
 struct Field2D df;
 
 // calculate order parameter:
-double phiminusphi3[gridsize][gridsize];
-double lapphiminusphi3[gridsize][gridsize];
+double phiplusphi3[gridsize][gridsize];
+double lapphiplusphi3[gridsize][gridsize];
 double GradOrderParamField[gridsize][gridsize][2];
 double vdotgrad[gridsize][gridsize];
 double velocityField[gridsize][gridsize][2];
@@ -135,16 +160,18 @@ double OrderParamField[gridsize][gridsize];
 double OrderCubedParamField[gridsize][gridsize];
 double LapOrderParamField[gridsize][gridsize];
 double LapLapOrderParamField[gridsize][gridsize];
+double chempotfield[gridsize][gridsize];
+double lapchempotfield[gridsize][gridsize];
 #define SpeedOfSound (1.0/1.7320508075688772)
 #define TimeRelaxationConstant 0.9
 #define defaultSpeedX 0.0
 #define defaultSpeedY 0.0
 #define PeriodicBCX 1
 #define PeriodicBCY 1
-#define MFluid 0.2
-#define fluida 0.05
-#define fluidb 0.05
-#define KFluid 0.04
+#define MFluid 0.1
+#define fluida -0.1
+#define fluidb 0.1
+#define KFluid 0.1
 
 double getMomentum(struct Field2D exfield, int x, int y) {
 	double xmom = 0;
@@ -170,31 +197,36 @@ double BodyForceTable[gridsize][gridsize][2];
 // Field Updating Functions
 // // // // //
 
-inline double getVal(double exfield[gridsize][gridsize], int x, int y, int useGhosts) {
-    if (useGhosts) {
-        if (x < 0) x = 0;
-        if (x >= gridsize) x = gridsize - 1;
-        if (y < 0) y = 0;
-        if (y >= gridsize) y = gridsize - 1;
-        return exfield[x][y];
+
+
+inline double getVal(double exfield[gridsize][gridsize], int x, int y) {
+	int xi, yi;
+    if (PeriodicBCX == 0) {
+        if (x < 0) xi = 0;
+        if (x >= gridsize) xi = gridsize - 1;
     } else {
-        int xi = (x + gridsize) % gridsize;
-        int yi = (y + gridsize) % gridsize;
-        return exfield[xi][yi];
+        xi = (x + gridsize) % gridsize;
     }
+	if (PeriodicBCY == 0) {
+        if (y < 0) yi = 0;
+        if (y >= gridsize) yi = gridsize - 1;
+    } else {
+        yi = (y + gridsize) % gridsize;
+    }
+	return exfield[xi][yi];
 }
 
 // 9-point Laplacian
 double computeLaplacianEl(double exfield[gridsize][gridsize], int x, int y, int useGhosts) {
-    double c  = getVal(exfield, x, y, useGhosts);
-    double n  = getVal(exfield, x, y+1, useGhosts);
-    double s  = getVal(exfield, x, y-1, useGhosts);
-    double e  = getVal(exfield, x+1, y, useGhosts);
-    double w  = getVal(exfield, x-1, y, useGhosts);
-    double ne = getVal(exfield, x+1, y+1, useGhosts);
-    double nw = getVal(exfield, x-1, y+1, useGhosts);
-    double se = getVal(exfield, x+1, y-1, useGhosts);
-    double sw = getVal(exfield, x-1, y-1, useGhosts);
+    double c  = getVal(exfield, x, y);
+    double n  = getVal(exfield, x, y+1);
+    double s  = getVal(exfield, x, y-1);
+    double e  = getVal(exfield, x+1, y);
+    double w  = getVal(exfield, x-1, y);
+    double ne = getVal(exfield, x+1, y+1);
+    double nw = getVal(exfield, x-1, y+1);
+    double se = getVal(exfield, x+1, y-1);
+    double sw = getVal(exfield, x-1, y-1);
 
     return (-20.0*c + 4.0*(n+s+e+w) + (ne+nw+se+sw)) / 6.0;
 }
@@ -203,8 +235,8 @@ double computeLaplacianEl(double exfield[gridsize][gridsize], int x, int y, int 
 void gradientField(double exfield[gridsize][gridsize], double gradexfield[gridsize][gridsize][2], int useGhosts) {
     for (int x = 0; x < gridsize; x++) {
         for (int y = 0; y < gridsize; y++) {
-            double dx = (getVal(exfield, x+1, y, useGhosts) - getVal(exfield, x-1, y, useGhosts)) * 0.5;
-            double dy = (getVal(exfield, x, y+1, useGhosts) - getVal(exfield, x, y-1, useGhosts)) * 0.5;
+            double dx = (getVal(exfield, x+1, y) - getVal(exfield, x-1, y)) * 0.5;
+            double dy = (getVal(exfield, x, y+1) - getVal(exfield, x, y-1)) * 0.5;
 
             gradexfield[x][y][0] = dx; // ∂φ/∂x
             gradexfield[x][y][1] = dy; // ∂φ/∂y
@@ -272,6 +304,8 @@ int main ()
 
 	setbuf(stdout, NULL);
 
+	srand(time(NULL));
+
 	int x,y;
 
 
@@ -298,11 +332,15 @@ int main ()
 
 	for(x=0;x<gridsize;x++) {
     	for(y=0;y<gridsize;y++) {
-        	OrderParamField[x][y] = -1.0;
+        	// OrderParamField[x][y] = -1.0;
+			// Uniform noise in [-noiseAmplitude, +noiseAmplitude]
+            double rndom = ((double)rand() / RAND_MAX) * 2.0 - 1.0;
+            OrderParamField[x][y] = 0.0 + 0.05 * rndom;
     	}
 	}
 
-	MakeLiquidDisc(125,250,250, 1.0);
+	// MakeLiquidDisc(20,20,20, 1.0);
+	// MakeLiquidDisc(20,80,80, -1.0);
 	// MakeLiquidDisc(8,70,75);
 	// MakeLiquidDisc
 	// MakeLiquidDisc(10,75,75);
@@ -345,19 +383,18 @@ int main ()
 
 	// collision step
 	int i,j;
-	double bodyfprefactor[gridsize][gridsize];
-	double gradbodyfprefactor[gridsize][gridsize][2];
+	double gradchempotfield[gridsize][gridsize][2];
 	
 	int pos = 10;
 
-	int phi_timesteps = 50;
+	int phi_timesteps = 20;
 	
 	int rhythm = 0;
 
 	FILE *log = fopen("debug.log", "w");
 
 	int l;
-	int time_steps_l = 2000;
+	int time_steps_l = 3800;
 	// double OrderParamTable[time_steps_l][gridsize][gridsize];
 	double *OrderParamTable = malloc(time_steps_l * gridsize * gridsize * sizeof(double));
 	double *MomentumTable = malloc(time_steps_l * gridsize * gridsize * sizeof(double));
@@ -384,33 +421,36 @@ int main ()
 				}
 			}
 			laplacianField(OrderParamField, LapOrderParamField, 0);
-			laplacianField(LapOrderParamField, LapLapOrderParamField, 0);
 			
 			for(x=0;x<gridsize;x++) {
 				for(y=0;y<gridsize;y++) {
-					phiminusphi3[x][y] = fluida*OrderParamField[x][y] - fluidb*OrderCubedParamField[x][y];
+					phiplusphi3[x][y] = fluida*OrderParamField[x][y] + fluidb*OrderCubedParamField[x][y];
 				}	
 			}
 			
-			laplacianField(phiminusphi3, lapphiminusphi3, 0);
+			laplacianField(phiplusphi3, lapphiplusphi3, 0);
+			for(x=0;x<gridsize;x++) {
+				for(y=0;y<gridsize;y++) {
+					chempotfield[x][y] = phiplusphi3[x][y] - KFluid*LapOrderParamField[x][y];
+				}
+			}
 
 			// update order parameter
 			
 			gradientField(OrderParamField, GradOrderParamField, 0);
+			laplacianField(chempotfield, lapchempotfield, 0);
 			for(x=0;x<gridsize;x++) {
 				for(y=0;y<gridsize;y++) {
 					vdotgrad[x][y] = velocityField[x][y][0]*GradOrderParamField[x][y][0]
 					+ velocityField[x][y][1]*GradOrderParamField[x][y][1];
+					// vdotgrad[x][y] = 0.0;
 				}
 			}
 			double dt_phi = 1.0/((double)phi_timesteps);
 			for(x=0;x<gridsize;x++) {
 				for(y=0;y<gridsize;y++) {
-					OrderParamField[x][y] = OrderParamField[x][y] + dt_phi*(MFluid*lapphiminusphi3[x][y] - MFluid*KFluid*LapLapOrderParamField[x][y] 
+					OrderParamField[x][y] = OrderParamField[x][y] + dt_phi*(MFluid*lapchempotfield[x][y] 
 					- vdotgrad[x][y]);
-
-					if (OrderParamField[x][y] > 1.5) OrderParamField[x][y] = 1.5;
-            		if (OrderParamField[x][y] < -1.5) OrderParamField[x][y] = -1.5;
 				}
 			}
 		}
@@ -418,17 +458,11 @@ int main ()
 		// calculate body force
 
 		
+		gradientField(chempotfield, gradchempotfield, 0);
 		for(x=0;x<gridsize;x++) {
 			for(y=0;y<gridsize;y++) {
-				bodyfprefactor[x][y] = phiminusphi3[x][y] - KFluid*LapOrderParamField[x][y];
-			}
-		}
-		
-		gradientField(bodyfprefactor, gradbodyfprefactor, 0);
-		for(x=0;x<gridsize;x++) {
-			for(y=0;y<gridsize;y++) {
-				BodyForceTable[x][y][0] = -OrderParamField[x][y]*gradbodyfprefactor[x][y][0];
-				BodyForceTable[x][y][1] = -OrderParamField[x][y]*gradbodyfprefactor[x][y][1];
+				BodyForceTable[x][y][0] = -OrderParamField[x][y]*gradchempotfield[x][y][0];
+				BodyForceTable[x][y][1] = -OrderParamField[x][y]*gradchempotfield[x][y][1];
 				double max_force = 0.2;
 				if (BodyForceTable[x][y][0] > max_force) BodyForceTable[x][y][0] = max_force;
 				if (BodyForceTable[x][y][0] < -max_force) BodyForceTable[x][y][0] = -max_force;
@@ -641,15 +675,7 @@ int main ()
 				else {
 
 					// clr = GetRainbowColor(20*getMomentum(fieldo,x,y)/SpeedOfSound, 1);
-					if (O(l,x,y) > 0.9) {
-						clr = BLUE;
-					}
-					else if(O(l,x,y) < -0.9) {
-						clr = ORANGE;
-					}
-					else {
-						clr = GREEN;
-					}
+					clr = PhiToColor(O(l,x,y));
 
 					clr2 = GetRainbowColor(10*Mtbl(l,x,y)/SpeedOfSound, 1);
 					// clr = AngleToRainbow(atan3(velocityField[x][y][0],velocityField[x][y][1]));

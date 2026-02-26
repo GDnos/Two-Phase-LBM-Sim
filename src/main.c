@@ -674,7 +674,7 @@ int main ()
 	int jindex=0;
 	// Loop over saved timesteps
 	for (int l = 0; l < time_steps_l; l++) {
-		if((l%8)!= 1){continue;}
+		if((l%40)!= 1){continue;}
 		// Fill image from stored order parameter
 		jindex=jindex+1;
 		for (int y = 0; y < WindowSize; y++) {
@@ -703,7 +703,7 @@ int main ()
 		printf("Wrote %s\n", filename);
 	}
 
-    system("ffmpeg -framerate 24 "
+    system("ffmpeg -framerate 6 "
            "-i frames/frame_%05d.png "
            "-c:v libx264 -pix_fmt yuv420p output.mp4");
 
